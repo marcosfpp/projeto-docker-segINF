@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------
+  # FIREWALL / ROTEADOR
+  # ----------------------------------------
+  firewall:
+    image: alpine:latest
+    container_name: firewall
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.ip_forward=1
+    volumes:
+      # Mapeia o script do seu PC para dentro do container
+      - ./firewall.sh:/firewall.sh:ro
+    # Instala o iptables, dá permissão de execução ao script e o executa
+    command: sh -c "apk add --no-cache iptables dos2unix && cp /firewall.sh /tmp/firewall.sh && dos2unix /tmp/firewall.sh && chmod +x /tmp/firewall.sh && /tmp/firewall.sh"
+    networks:
+      lan_network:
+        ipv4_address: 192.168.10.254
+      dmz_network:
+        ipv4_address: 172.16.20.254
+  # ----------------------------------------
+  # REDE CLIENTE (LAN)
+  # ----------------------------------------
+  cliente:
+    image: alpine:latest
+    container_name: workstation_recepcao
+    cap_add:
+      - NET_ADMIN
+    # Instala ferramentas de teste e força o tráfego da DMZ a passar pelo Firewall
+    command: sh -c "apk add --no-cache curl nmap && ip route add 172.16.20.0/24 via 192.168.10.254 && tail -f /dev/null"
+    networks:
+      lan_network:
+        ipv4_address: 192.168.10.10
+
+  # ----------------------------------------
+  # REDE DMZ (SERVIDORES)
+  # ----------------------------------------
+  web:
+    image: nginx:alpine
+    container_name: dmz_web
+    cap_add:
+      - NET_ADMIN
+    # Força a resposta para a LAN a passar pelo Firewall, depois inicia o Nginx
+    command: sh -c "ip route add 192.168.10.0/24 via 172.16.20.254 && nginx -g 'daemon off;'"
+    networks:
+      dmz_network:
+        ipv4_address: 172.16.20.10
+
+  db:
+    image: mariadb:10.5
+    container_name: dmz_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    cap_add:
+      - NET_ADMIN
+    # Força a resposta para a LAN a passar pelo Firewall, depois inicia o Banco
+    command: sh -c "apt-get update && apt-get install -y iproute2 && ip route add 192.168.10.0/24 via 172.16.20.254 && docker-entrypoint.sh mysqld"
+    networks:
+      dmz_network:
+        ipv4_address: 172.16.20.20
+
+# ----------------------------------------
+# DEFINIÇÃO DAS REDES
+# ----------------------------------------
+networks:
+  lan_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.10.0/24
+  dmz_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.16.20.0/24
